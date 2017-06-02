@@ -74,14 +74,13 @@ Transform4f get_system(float lambda, int degree = 3) {
 
 int main() {
 
+  // input params
   int degree = 3;
   float sample_mul = 1000;
   float r_entrance = 19.5;
   int num_lambdas = 12;
   int filter_size = 1;
 
-
-  // Sensor scaling
   const float sensor_width = 36;
   const int sensor_xres = 1920;
   const int sensor_yres = 1080;
@@ -90,16 +89,12 @@ int main() {
   const float lambda_from = 440;
   const float lambda_to = 660;
 
+  // replace with nuke function
   CImg<float> img_in("InputPFM/night2.pfm");
   int width = img_in.width();
   int height = img_in.height();
-
-  int frame = 299;
   
   float r_pupil = r_entrance;
-  if (frame < 100){
-    r_pupil = 0.1*sqrt(1.f+frame) * r_entrance;
-  }
   cout << "Pupil radius: "<<r_pupil<<endl;
   
   // Focus on 550nm
@@ -108,15 +103,16 @@ int main() {
   // Determine back focal length from degree-1 terms (matrix optics)
   float d3 = find_focus_X(system);
   cout << "Focus: " << d3 << endl;
+
   // Compute magnification and output equation system
   float magnification = get_magnification_X(system >> propagate_5(d3));
   cout << "Magnification: " << magnification << endl;
-  //cout << "System: " << system << endl<<endl;
 
   // Add that propagation, plus a little animated defocus to the overall system;
-  Transform4f prop = propagate_5(d3 - ((frame>=100)?(0.02*(frame-100)):0), degree);
+  Transform4f prop = propagate_5(d3, degree);
   system = system >> prop;
 
+  // replace with nuke thing
   CImg<float> img_out(sensor_xres, sensor_yres, 1, 3, 0);
 
   // Precompute spectrum
@@ -165,10 +161,6 @@ int main() {
     // Bake lambda into derivatives as well:
 
     for (int j = 0; j < height; j++) {
-      
-      if (!(j%10)){
-        cout << "." << flush;
-      }
 
       const float y_sensor = ((j - height/2)/(float)width) * sensor_width;
       const float y_world = y_sensor / magnification;
@@ -247,7 +239,7 @@ int main() {
   }
 
   char fn[256];
-  sprintf(fn,"OutputPFM/night2-frame%03d.pfm",frame);
+  sprintf(fn,"OutputPFM/night2_blurred.pfm");
   img_out.save(fn);
 
 }
