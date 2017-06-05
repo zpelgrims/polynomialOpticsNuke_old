@@ -37,6 +37,7 @@ using namespace cimg_library;
 
 // stays exactly the same
 Transform4f get_system(float lambda, int degree = 3) {
+
  // Let's simulate Edmund Optics achromat #NT32-921:
   /* Clear Aperture CA (mm) 	39.00
      Eff. Focal Length EFL (mm) 	120.00
@@ -108,11 +109,11 @@ int main() {
   float magnification = get_magnification_X(system >> propagate_5(d3));
   cout << "Magnification: " << magnification << endl;
 
-  // Add that propagation, plus a little animated defocus to the overall system;
+  // Add that propagation
   Transform4f prop = propagate_5(d3, degree);
   system = system >> prop;
 
-  // replace with nuke thing
+  // replace with nuke thing, or maybe we don't need it at all
   CImg<float> img_out(sensor_xres, sensor_yres, 1, 3, 0);
 
   // Precompute spectrum
@@ -146,7 +147,14 @@ int main() {
   // Support of an input image pixel in world plane
   float pixel_size = sensor_width/(float)width/magnification;
 
+  ///// END PRECOMPUTATION
 
+
+
+
+  ///// START PER PIXEL COMPUTATIONS
+
+  // try to implement with a single wavelength first
   for (int ll = 0; ll < num_lambdas; ++ll) {
     float lambda = lambda_from + (lambda_to - lambda_from) * (ll / (float)(num_lambdas-1));
     if (num_lambdas == 1){
@@ -158,7 +166,6 @@ int main() {
     System43f system_lambda = system_lambert_cos2.bake_input_variable(4, lambda);
     system_lambda %= degree;
 
-    // Bake lambda into derivatives as well:
 
     for (int j = 0; j < height; j++) {
 
@@ -214,9 +221,30 @@ int main() {
             lambert = 0; // NaN check
           }
 
-          img_out.set_linear_atXY(lambert * sample_weight * rgb[0 + 3 * ll], out[0],out[1],0,0, true);
-          img_out.set_linear_atXY(lambert * sample_weight * rgb[1 + 3 * ll], out[0],out[1],0,1, true);
-          img_out.set_linear_atXY(lambert * sample_weight * rgb[2 + 3 * ll], out[0],out[1],0,2, true);
+
+          //! Set pixel value, using linear interpolation for the X and Y-coordinates.
+          /**
+             Set pixel value at specified coordinates (\c fx,\c fy,\c z,\c c) in the image instance, in a way that the value is spread
+             amongst several neighbors if the pixel coordinates are indeed float-valued.
+             \param value : Pixel value to set.
+             \param fx : X-coord of the pixel value (float-valued).
+             \param fy : Y-coord of the pixel value (float-valued).
+             \param z : Z-coord of the pixel value.
+             \param c : C-coord of the pixel value.
+             \param is_added : Boolean telling if the pixel value is added to (\c true), or simply replace (\c false) the current image pixel(s).
+             \return A reference to the current image instance.
+             \note
+             - If specified coordinates are outside image bounds, no operations are performed.
+             \sa linear_atXY(),
+                 set_linear_atXYZ().
+          
+          CImg<T>& set_linear_atXY(const T& value, const float fx, const float fy=0, const int z=0, const int c=0,
+                                   const bool is_added=false)
+
+          **/
+          img_out.set_linear_atXY(lambert * sample_weight * rgb[0 + 3 * ll], out[0], out[1], 0, 0, true);
+          img_out.set_linear_atXY(lambert * sample_weight * rgb[1 + 3 * ll], out[0], out[1], 0, 1, true);
+          img_out.set_linear_atXY(lambert * sample_weight * rgb[2 + 3 * ll], out[0], out[1], 0, 2, true);
 
         }
       }
@@ -227,9 +255,7 @@ int main() {
   // Fix gamut problem (pure wavelengths sometimes result in negative RGB)
   for (int j = 0; j < sensor_yres; ++j){
     for (int i = 0; i < sensor_xres; ++i) { 
-      float max_value = max(img_out.atXY(i, j, 0, 0),
-      		              max(img_out.atXY(i, j, 0, 1),
-      			                img_out.atXY(i, j, 0, 2)));
+      float max_value = max(img_out.atXY(i, j, 0, 0), max(img_out.atXY(i, j, 0, 1), img_out.atXY(i, j, 0, 2)));
 
       img_out.atXY(i,j,0,0) = max(img_out.atXY(i,j,0,0), 0.02f*max_value);
       img_out.atXY(i,j,0,1) = max(img_out.atXY(i,j,0,1), 0.02f*max_value);
@@ -238,6 +264,7 @@ int main() {
     }
   }
 
+  // not necessary
   char fn[256];
   sprintf(fn,"OutputPFM/night2_blurred.pfm");
   img_out.save(fn);
