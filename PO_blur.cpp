@@ -1,3 +1,6 @@
+// Implementation of Polynomial Optics [2012] for Nuke.
+
+
 // TODO
 
 // I think there might be a problem with the guard function which locks code to a single thread
@@ -41,7 +44,6 @@ using namespace cimg_library;
 #include <iostream>
 #include <stdlib.h>
 #include <math.h>
-using namespace std;
 
 // Disable some warnings on Microsoft VC++ compilers.
 #ifdef _MSC_VER
@@ -58,11 +60,9 @@ class polynomialOpticsBlur : public Iop
   // These are the locations the user interface will store into:
   double sample_mul;
   int num_lambdas;
-  double focus_point;
-  double obj_distance;
-  double aperture;
+  double focusDistance;
+  double pupilRadius;
 
-  float _maxValue;
   bool _firstTime; 
   Lock _lock;
   CImg <float> * img_out;
@@ -95,8 +95,8 @@ private:
 polynomialOpticsBlur::polynomialOpticsBlur(Node* node) : Iop(node){
   sample_mul = 100.0f;
   num_lambdas = 1;
-  obj_distance = 5000;  
-  aperture = 5.6f;
+  focusDistance = 5000;  
+  pupilRadius = 5.6f;
 
   _firstTime = true;
 }
@@ -108,8 +108,8 @@ void polynomialOpticsBlur::knobs(Knob_Callback f){
   // WH_knob(f, &width, "size");
   Int_knob(f, &num_lambdas, "Lambdas");
   Float_knob(f, &sample_mul, "Samples");
-  Float_knob(f, &obj_distance, "Object Distance");
-  Float_knob(f, &aperture, "Aperture");
+  Float_knob(f, &focusDistance, "Object Distance");
+  Float_knob(f, &pupilRadius, "Pupil Radius");
 }
 
 
@@ -168,7 +168,7 @@ void polynomialOpticsBlur::engine ( int y, int l, int r, ChannelMask channels, R
 
     // Compute whole image using PO only once
     if (_firstTime) {
-      cout << "First time " << endl;
+      std::cout << "First time " << std::endl;
 
       // get input properties
       Format format = input0().format();
@@ -217,13 +217,13 @@ void polynomialOpticsBlur::engine ( int y, int l, int r, ChannelMask channels, R
 
       int degree = 3;
       int filter_size = 1;
-      float r_pupil = aperture;
-      cout << "Pupil radius: "<< r_pupil << endl;
+      float pupilRadius = aperture;
+      std::cout << "Pupil radius: "<< pupilRadius << std::endl;
 
       // Sensor scaling
       const float sensor_width = 36;
       const float sensor_scaling = width / sensor_width;
-      cout << "Sensor scaling: "<< sensor_scaling << endl;
+      std::cout << "Sensor scaling: "<< sensor_scaling << std::endl;
 
       const float lambda_from = 440;
       const float lambda_to = 660;
@@ -233,15 +233,15 @@ void polynomialOpticsBlur::engine ( int y, int l, int r, ChannelMask channels, R
 
        
       // Focus on 550nm
-      Transform4f system = get_system(550, obj_distance, degree);
+      Transform4f system = get_system(550, focusDistance, degree);
 
       // Determine back focal length from degree-1 terms (matrix optics)
       float d3 = find_focus_X(system);
-      cout << "Focus: " << d3 << endl;
+      std::cout << "Focus: " << d3 << std::endl;
 
       // Compute magnification and output equation system
       float magnification = get_magnification_X(system >> propagate_5(d3));
-      cout << "Magnification: " << magnification << endl;
+      std::cout << "Magnification: " << magnification << std::endl;
 
       // Add that propagation
       Transform4f prop = propagate_5(d3, degree);
@@ -253,7 +253,10 @@ void polynomialOpticsBlur::engine ( int y, int l, int r, ChannelMask channels, R
       float *rgb = new float[3 * num_lambdas];
       for (int ll = 0; ll < num_lambdas; ++ll) {
         float lambda = lambda_from + (lambda_to - lambda_from) * (ll / (float)(num_lambdas-1));
-        if (num_lambdas == 1) lambda = 550;
+        if (num_lambdas == 1){
+          lambda = 550;
+        }
+
         // Convert wavelength to spectral power
         spectrum_p_to_rgb(lambda, 1, rgb + 3 * ll);
       }
@@ -261,8 +264,8 @@ void polynomialOpticsBlur::engine ( int y, int l, int r, ChannelMask channels, R
 
 
       // Sample optical system at two spectral locations
-      Transform4d system_spectral_center = get_system(500, obj_distance) >> prop;
-      Transform4d system_spectral_right = get_system(600, obj_distance, degree) >> prop;
+      Transform4d system_spectral_center = get_system(500, focusDistance) >> prop;
+      Transform4d system_spectral_right = get_system(600, focusDistance, degree) >> prop;
 
       // Obtain (xyworld + xyaperture + lambda) -> (ray) mapping including chromatic effects,
       // by linear interpolation of the two sample systems drawn above
@@ -283,13 +286,12 @@ void polynomialOpticsBlur::engine ( int y, int l, int r, ChannelMask channels, R
       for (int ll = 0; ll < num_lambdas; ++ll) {
         float lambda = lambda_from + (lambda_to - lambda_from) * (ll / (float)(num_lambdas-1));
         if (num_lambdas == 1) lambda = 550;
-        cout << "[" << lambda << "nm]" << flush;
+        std::cout << "[" << lambda << "nm]" << flush;
 
         // Bake lambda dependency
         System43f system_lambda = system_lambert_cos2.bake_input_variable(4, lambda);
         system_lambda %= degree;
 
-        // Bake lambda into derivatives as well:
        
         for (int j = 0; j < height; j++) {
           
@@ -298,7 +300,6 @@ void polynomialOpticsBlur::engine ( int y, int l, int r, ChannelMask channels, R
             return;
           }
 
-          if (!(j%10)) cout << "." << flush;
           const float y_sensor = ((j - height/2)/(float)width) * sensor_width;
           const float y_world = y_sensor / magnification;
 
@@ -329,9 +330,9 @@ void polynomialOpticsBlur::engine ( int y, int l, int r, ChannelMask channels, R
               // Rejection-sample points from lens aperture:
               float x_ap, y_ap;
               do {
-                x_ap = (rand() / (float)RAND_MAX - 0.5) * 2 * r_pupil;
-                y_ap = (rand() / (float)RAND_MAX - 0.5) * 2 * r_pupil;
-              } while (x_ap * x_ap + y_ap * y_ap > r_pupil * r_pupil);
+                x_ap = (rand() / (float)RAND_MAX - 0.5) * 2 * pupilRadius;
+                y_ap = (rand() / (float)RAND_MAX - 0.5) * 2 * pupilRadius;
+              } while (x_ap * x_ap + y_ap * y_ap > pupilRadius * pupilRadius);
             
               float in[5], out[4];
 
@@ -348,30 +349,32 @@ void polynomialOpticsBlur::engine ( int y, int l, int r, ChannelMask channels, R
 
               // out[2] contains one minus square of Lambertian cosine
               float lambert = sqrt(1 - out[2]);
-              if (lambert != lambert) lambert = 0; // NaN check
+              if (lambert != lambert){
+                lambert = 0; // NaN check
+              }
 
-              img_out->set_linear_atXY(lambert * sample_weight * rgb[0 + 3 * ll], out[0],out[1],0,0, true);
-              img_out->set_linear_atXY(lambert * sample_weight * rgb[1 + 3 * ll], out[0],out[1],0,1, true);
-              img_out->set_linear_atXY(lambert * sample_weight * rgb[2 + 3 * ll], out[0],out[1],0,2, true);
+              img_out->set_linear_atXY(lambert * sample_weight * rgb[0 + 3 * ll], out[0], out[1], 0, 0, true);
+              img_out->set_linear_atXY(lambert * sample_weight * rgb[1 + 3 * ll], out[0], out[1], 0, 1, true);
+              img_out->set_linear_atXY(lambert * sample_weight * rgb[2 + 3 * ll], out[0], out[1], 0, 2, true);
             }
           }
         }
       }
 
 
-        // Fix gamut problem (pure wavelengths sometimes result in negative RGB)
-        for (int j = 0; j < height; ++j){
-          for (int i = 0; i < width; ++i){ 
-            float max_value =  max(img_out->atXY(i, j, 0, 0), max(img_out->atXY(i, j, 0, 1), img_out->atXY(i, j, 0, 2)));
-            img_out->atXY(i,j,0,0) = max(img_out->atXY(i,j,0,0), 0.02f*max_value);
-            img_out->atXY(i,j,0,1) = max(img_out->atXY(i,j,0,1), 0.02f*max_value);
-            img_out->atXY(i,j,0,2) = max(img_out->atXY(i,j,0,2), 0.02f*max_value);
-          } 
-        }
+      // Fix gamut problem (pure wavelengths sometimes result in negative RGB)
+      for (int j = 0; j < height; ++j){
+        for (int i = 0; i < width; ++i){ 
+          float max_value =  max(img_out->atXY(i, j, 0, 0), max(img_out->atXY(i, j, 0, 1), img_out->atXY(i, j, 0, 2)));
+          img_out->atXY(i,j,0,0) = max(img_out->atXY(i,j,0,0), 0.02f*max_value);
+          img_out->atXY(i,j,0,1) = max(img_out->atXY(i,j,0,1), 0.02f*max_value);
+          img_out->atXY(i,j,0,2) = max(img_out->atXY(i,j,0,2), 0.02f*max_value);
+        } 
+      }
 
 
       _firstTime = false;
-      cout << " done " << endl;
+      std::cout << " done " << std::endl;
     }
   } // end lock
 
@@ -386,13 +389,15 @@ void polynomialOpticsBlur::engine ( int y, int l, int r, ChannelMask channels, R
   }
 
 
-  foreach( z, channels ) {
+  foreach(z, channels) {
     float *CUR = row.writable(z) + l;
     const float* inptr = in[z] + l;
     const float *END = row[z] + r;
     int x = l;
+
     while ( CUR < END ) {
       int chanNo = z - 1;
+      
       if (chanNo < 3) { 
         *CUR++ = img_out->atXY(x++, y, 0, chanNo);
       } else {
